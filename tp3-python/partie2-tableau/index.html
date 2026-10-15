@@ -1,0 +1,309 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tableau partagé</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&family=Nunito:wght@400;700&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --mur: #fde4ee;        /* fond rose pâle */
+      --bois: #f28cb6;       /* cadre rose */
+      --bois-fonce: #d65c93; /* rebord rose foncé */
+      --ardoise: #4a2240;    /* tableau prune, les couleurs ressortent bien dessus */
+      --craie: #fff4f8;
+      --encre: #4a2c3a;
+      --titre: #e84c8b;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--mur);
+      color: var(--encre);
+      font-family: "Nunito", "Segoe UI", sans-serif;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px 40px;
+    }
+
+    header {
+      width: 100%;
+      max-width: 960px;
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      gap: 16px;
+      flex-wrap: wrap;
+      margin-bottom: 14px;
+    }
+
+    h1 {
+      font-family: "Caveat", cursive;
+      font-size: 3.2rem;
+      line-height: 1;
+      margin: 0;
+      color: var(--titre);
+    }
+
+    #etat {
+      font-size: 0.95rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    #voyant {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #b04a3a;
+    }
+    #voyant.ok { background: #4caf7a; }
+
+    /* le cadre en bois autour de l'ardoise */
+    .cadre {
+      width: 100%;
+      max-width: 960px;
+      padding: 16px;
+      background: var(--bois);
+      border-radius: 22px 22px 0 0;
+      box-shadow: inset 0 0 0 3px var(--bois-fonce);
+    }
+
+    canvas {
+      display: block;
+      border-radius: 10px;
+      width: 100%;
+      height: auto;
+      background: var(--ardoise);
+      cursor: crosshair;
+      touch-action: none;
+    }
+
+    /* le rebord sous le tableau, où on pose les craies */
+    .rebord {
+      width: 100%;
+      max-width: 960px;
+      background: var(--bois-fonce);
+      color: var(--craie);
+      padding: 12px 16px;
+      border-radius: 0 0 22px 22px;
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      flex-wrap: wrap;
+    }
+
+    .rebord label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.95rem;
+    }
+
+    input[type="color"] {
+      width: 38px;
+      height: 30px;
+      border: 2px solid var(--craie);
+      border-radius: 4px;
+      padding: 0;
+      background: none;
+      cursor: pointer;
+    }
+
+    button {
+      font: inherit;
+      font-weight: 700;
+      border: 2px solid var(--craie);
+      background: transparent;
+      color: var(--craie);
+      padding: 6px 14px;
+      border-radius: 999px;
+      cursor: pointer;
+    }
+    button:hover { background: var(--craie); color: var(--bois-fonce); }
+    button:focus-visible, input:focus-visible { outline: 3px solid #ffd1e3; outline-offset: 2px; }
+
+    .pousse { margin-left: auto; }
+
+    #journal {
+      width: 100%;
+      max-width: 960px;
+      margin-top: 16px;
+      font-size: 0.9rem;
+      color: #a07d8c;
+    }
+    #journal p { margin: 2px 0; }
+  </style>
+</head>
+<body>
+
+  <header>
+    <h1>Tableau partagé</h1>
+    <div id="etat"><span id="voyant"></span><span id="texte-etat">connexion...</span></div>
+  </header>
+
+  <div class="cadre">
+    <canvas id="tableau" width="900" height="560"></canvas>
+  </div>
+
+  <div class="rebord">
+    <label>Craie <input type="color" id="couleur" value="#ff9cc7"></label>
+    <label>Épaisseur <input type="range" id="epaisseur" min="1" max="12" value="3"></label>
+    <button id="effacer" class="pousse">Effacer pour tout le monde</button>
+    <button id="enregistrer">Enregistrer en image</button>
+  </div>
+
+  <div id="journal"></div>
+
+  <script>
+    // le canvas et son "pinceau"
+    const canvas = document.getElementById("tableau");
+    const ctx = canvas.getContext("2d");
+    const ARDOISE = "#4a2240";
+
+    const noms = { point: "point", line: "ligne", circle: "cercle", rectangle: "rectangle", square: "carré" };
+
+    // transforme [r, g, b] en "rgb(r, g, b)" pour le canvas
+    function rgb(c) {
+      return `rgb(${c[0]}, ${c[1]}, ${c[2]})`;
+    }
+
+    // dessine une forme reçue du serveur
+    function dessiner(f) {
+      ctx.fillStyle = rgb(f.color);
+      ctx.strokeStyle = rgb(f.color);
+      ctx.lineWidth = f.epaisseur || 3;
+      ctx.lineCap = "round";
+
+      if (f.shape === "point") {
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, 4, 0, 2 * Math.PI);
+        ctx.fill();
+      } else if (f.shape === "line") {
+        ctx.beginPath();
+        ctx.moveTo(f.x1, f.y1);
+        ctx.lineTo(f.x2, f.y2);
+        ctx.stroke();
+      } else if (f.shape === "circle") {
+        ctx.beginPath();
+        ctx.arc(f.x, f.y, f.radius, 0, 2 * Math.PI);
+        ctx.fill();
+      } else if (f.shape === "rectangle") {
+        ctx.fillRect(f.x, f.y, f.width, f.height);
+      } else if (f.shape === "square") {
+        ctx.fillRect(f.x, f.y, f.cote, f.cote);
+      }
+    }
+
+    // petite ligne de journal sous le tableau (les 5 dernières formes)
+    function noter(texte) {
+      const journal = document.getElementById("journal");
+      const ligne = document.createElement("p");
+      const heure = new Date().toLocaleTimeString();
+      ligne.textContent = `${heure}  ${texte}`;
+      journal.prepend(ligne);
+      while (journal.children.length > 5) journal.lastChild.remove();
+    }
+
+    // ----- connexion websocket (avec reconnexion automatique) -----
+    let ws;
+
+    function connecter() {
+      ws = new WebSocket(`ws://${location.host}/ws`);
+
+      ws.onopen = () => {
+        document.getElementById("voyant").classList.add("ok");
+        document.getElementById("texte-etat").textContent = "connecté";
+        ctx.clearRect(0, 0, canvas.width, canvas.height); // le serveur renvoie l'historique
+      };
+
+      ws.onmessage = (event) => {
+        const f = JSON.parse(event.data);
+        if (f.shape === "clear") {
+          ctx.clearRect(0, 0, canvas.width, canvas.height);
+          noter("tableau effacé");
+        } else if (f.shape === "info") {
+          const s = f.tableaux > 1 ? "x" : "";
+          document.getElementById("texte-etat").textContent = `connecté, ${f.tableaux} tableau${s} ouvert${f.tableaux > 1 ? "s" : ""}`;
+        } else {
+          dessiner(f);
+          if (!f.main_levee) noter(`${noms[f.shape]} reçu`);
+        }
+      };
+
+      ws.onclose = () => {
+        document.getElementById("voyant").classList.remove("ok");
+        document.getElementById("texte-etat").textContent = "déconnecté, nouvelle tentative...";
+        setTimeout(connecter, 2000);
+      };
+    }
+
+    connecter();
+
+    // ----- bonus : dessiner à la souris, partagé avec les autres -----
+    let enTrain = false;
+    let dernier = null;
+
+    // position de la souris dans le canvas (le canvas peut être rétréci par le css)
+    function position(event) {
+      const r = canvas.getBoundingClientRect();
+      return {
+        x: Math.round((event.clientX - r.left) * canvas.width / r.width),
+        y: Math.round((event.clientY - r.top) * canvas.height / r.height),
+      };
+    }
+
+    function couleurChoisie() {
+      const hex = document.getElementById("couleur").value;
+      return [1, 3, 5].map(i => parseInt(hex.slice(i, i + 2), 16));
+    }
+
+    canvas.addEventListener("pointerdown", (e) => {
+      enTrain = true;
+      dernier = position(e);
+    });
+
+    canvas.addEventListener("pointermove", (e) => {
+      if (!enTrain || !ws || ws.readyState !== WebSocket.OPEN) return;
+      const p = position(e);
+      // on envoie un petit bout de ligne, le serveur le renvoie à tout le monde (nous compris)
+      ws.send(JSON.stringify({
+        shape: "line", x1: dernier.x, y1: dernier.y, x2: p.x, y2: p.y,
+        color: couleurChoisie(),
+        epaisseur: Number(document.getElementById("epaisseur").value),
+        main_levee: true,
+      }));
+      dernier = p;
+    });
+
+    window.addEventListener("pointerup", () => { enTrain = false; });
+
+    // ----- boutons -----
+    document.getElementById("effacer").addEventListener("click", () => {
+      fetch("/clear", { method: "POST" });
+    });
+
+    document.getElementById("enregistrer").addEventListener("click", () => {
+      // on recopie le dessin sur le fond prune (sinon le png serait transparent)
+      const copie = document.createElement("canvas");
+      copie.width = canvas.width;
+      copie.height = canvas.height;
+      const c = copie.getContext("2d");
+      c.fillStyle = ARDOISE;
+      c.fillRect(0, 0, copie.width, copie.height);
+      c.drawImage(canvas, 0, 0);
+
+      const lien = document.createElement("a");
+      lien.download = "tableau.png";
+      lien.href = copie.toDataURL("image/png");
+      lien.click();
+    });
+  </script>
+</body>
+</html>
